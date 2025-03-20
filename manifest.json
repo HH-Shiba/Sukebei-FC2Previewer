@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "FC2 預覽側邊欄 - 雙來源+影片資訊版",
+  "version": "3.0",
+  "description": "側邊欄開啓後自動從 fc2ppvdb 提取影片預覽圖、影片資訊及相關影片（顯示女優名稱和相關影片），同時從 FC2 官方抓取 Sample Images，請求時自動設置 Cookies。",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://fc2ppvdb.com/*",
+    "https://adult.contents.fc2.com/*"
+  ],
+  "action": {
+    "default_title": "切換 FC2 預覽側邊欄"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://sukebei.nyaa.si/*"],
+      "js": ["content.js"],
+      "css": ["sidebar.css"]
+    }
+  ]
+}

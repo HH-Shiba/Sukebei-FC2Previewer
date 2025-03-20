@@ -1,0 +1,365 @@
+// 3.0 版本 - content.js
+
+let sidebarOpen = false;
+let sidebar = null;
+
+// 初始化：如果側邊欄開啓則自動刷新
+chrome.storage.local.get("sidebarOpen", (result) => {
+  if (result.sidebarOpen) {
+    openSidebar();
+    autoRefreshAll();
+  }
+});
+
+// 監聽背景訊息：側邊欄開關
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "TOGGLE_SIDEBAR") {
+    msg.sidebarOpen ? (openSidebar(), autoRefreshAll()) : closeSidebar();
+  }
+});
+
+// 打開側邊欄並注入基礎結構
+function openSidebar() {
+  if (!sidebar) {
+    sidebar = document.createElement("div");
+    sidebar.id = "fc2-sidebar";
+    sidebar.style.cssText = `
+      position: fixed; top: 0; right: 0; width: 480px; height: 100%;
+      background-color: #fff; border-left: 1px solid #ccc; z-index: 999999; overflow: auto; padding: 10px;
+    `;
+    sidebar.innerHTML = `
+      <h4>FC2 預覽</h4>
+      <p id="fc2-message">等待自動提取影片編號...</p>
+      <div id="fc2-info" style="margin-top:10px;"></div>
+      <hr>
+      <div id="fc2-preview" style="margin-top:10px;"></div>
+      <hr>
+      <h4>官方 Sample Images（前6張）</h4>
+      <div id="fc2-preview-official" style="margin-top:10px;"></div>
+    `;
+    document.body.appendChild(sidebar);
+  }
+  sidebarOpen = true;
+}
+
+function closeSidebar() {
+  if (sidebar) {
+    document.body.removeChild(sidebar);
+    sidebar = null;
+  }
+  sidebarOpen = false;
+}
+
+function autoRefreshAll() {
+  if (!window.location.href.includes("/view/")) return;
+  setTimeout(() => {
+    const videoNumber = autoExtractVideoNumber();
+    if (!videoNumber) return;
+    const msgElem = sidebar.querySelector("#fc2-message");
+    if (msgElem) msgElem.textContent = "";
+    // 影片資訊區（女優名稱 + 相關影片）
+    updateSection("fc2-info", fetchVideoInfo, updateVideoInfo, videoNumber);
+    // fc2ppvdb 預覽區
+    updateSection("fc2-preview", fetchPreviewSection, updatePreviewSection, videoNumber);
+    // 官方 Sample Images 區
+    updateSection("fc2-preview-official", fetchOfficialPreviewSection, updateOfficialPreviewSection, videoNumber);
+  }, 1000);
+}
+
+function updateSection(sectionId, fetchFunc, updateFunc, videoNumber) {
+  const elem = sidebar.querySelector("#" + sectionId);
+  if (elem) {
+    elem.innerHTML = `<p>正在抓取 ${sectionId}...</p>`;
+    fetchFunc(videoNumber).then(result => {
+      if (!result || (typeof result === "string" && (result.trim() === "" || result.startsWith("Error:")))) {
+        elem.innerHTML = `<p>未能提取 ${sectionId}。（${result}）</p>`;
+      } else {
+        updateFunc(result);
+      }
+    });
+  }
+}
+
+function autoExtractVideoNumber() {
+  const panelTitle = document.querySelector(".panel-heading .panel-title");
+  if (panelTitle) {
+    const match = panelTitle.textContent.match(/FC2-PPV-(\d+)/i);
+    if (match && match[1]) {
+      console.log("自動提取到影片編號：", match[1]);
+      return match[1];
+    }
+  }
+  console.log("未能自動提取影片編號");
+  return null;
+}
+
+document.addEventListener("mouseup", () => {
+  if (!sidebarOpen) return;
+  const selection = window.getSelection().toString().trim();
+  const match = selection.match(/FC2-PPV-(\d+)/i);
+  const msgElem = sidebar.querySelector("#fc2-message");
+  if (!match) {
+    if (msgElem) msgElem.textContent = "請選中影片標題中的 FC2-PPV-xxxxxxx";
+    return;
+  }
+  autoRefreshAll();
+});
+
+// ---------------------- Fetch & Update Functions ----------------------
+
+// 從 fc2ppvdb 頁面抓取預覽圖（返回 HTML）
+function fetchPreviewSection(videoNumber) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW", videoNumber }, (response) => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
+    });
+  })
+  .then(htmlText => {
+    const doc = new DOMParser().parseFromString(htmlText, "text/html");
+    const img = doc.querySelector(`a[target="_blank"] img[alt="${videoNumber}"]`);
+    if (img) {
+      const anchor = img.parentElement;
+      anchor.href = anchor.href.startsWith("//") ? "https:" + anchor.href : anchor.href;
+      img.src = img.src.startsWith("//") ? "https:" + img.src : img.src;
+      console.log("成功提取 fc2ppvdb 預覽圖 HTML：", anchor.outerHTML);
+      return anchor.outerHTML;
+    }
+    throw new Error("fc2ppvdb 預覽圖元素未找到");
+  })
+  .catch(error => {
+    console.error("抓取或解析 fc2ppvdb 頁面錯誤：", error);
+    return `Error: ${error.message}`;
+  });
+}
+
+function updatePreviewSection(html) {
+  const elem = sidebar.querySelector("#fc2-preview");
+  if (elem) elem.innerHTML = html;
+}
+
+// 從 FC2 官方頁面抓取 Sample Images（前6張）
+function fetchOfficialPreviewSection(videoNumber) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
+    });
+  })
+  .then(htmlText => {
+    const doc = new DOMParser().parseFromString(htmlText, "text/html");
+    const section = doc.querySelector("section.items_article_SampleImages");
+    if (section) {
+      const ul = section.querySelector("ul.items_article_SampleImagesArea");
+      if (ul) {
+        const liItems = Array.from(ul.querySelectorAll("li")).slice(0, 6);
+        const newUl = document.createElement("ul");
+        newUl.className = ul.className;
+        if (ul.hasAttribute("data-feed")) {
+          newUl.setAttribute("data-feed", ul.getAttribute("data-feed"));
+        }
+        liItems.forEach(li => newUl.appendChild(li.cloneNode(true)));
+        const newSection = document.createElement("section");
+        newSection.className = section.className;
+        const h3 = section.querySelector("h3");
+        if (h3) newSection.appendChild(h3.cloneNode(true));
+        newSection.appendChild(newUl);
+        console.log("成功提取官方 Sample Images：", newSection.outerHTML);
+        return newSection.outerHTML;
+      }
+      throw new Error("未找到官方預覽圖片列表");
+    }
+    throw new Error("官方 Sample Images section 未找到");
+  })
+  .catch(error => {
+    console.error("抓取或解析 FC2 官方頁面錯誤：", error);
+    return `Error: ${error.message}`;
+  });
+}
+
+function updateOfficialPreviewSection(html) {
+  const elem = sidebar.querySelector("#fc2-preview-official");
+  if (elem) elem.innerHTML = html;
+}
+
+// 從 fc2ppvdb 影片頁面抓取影片資訊，提取女優資訊
+function fetchVideoInfo(videoNumber) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: "FETCH_VIDEO_INFO", videoNumber }, (response) => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
+    });
+  })
+  .then(htmlText => {
+    return extractActressData(htmlText);
+  })
+  .catch(error => {
+    console.error("抓取或解析影片資訊錯誤：", error);
+    return `Error: ${error.message}`;
+  });
+}
+
+// 從影片資訊 HTML 中提取女優資訊（只取女優名稱與連結，過濾掉包含「ランキング」的）
+function extractActressData(htmlText) {
+  const doc = new DOMParser().parseFromString(htmlText, "text/html");
+  const actressDiv = Array.from(doc.querySelectorAll("div"))
+    .find(div => div.textContent.includes("女優：") && div.textContent.indexOf("ランキング") === -1);
+  if (!actressDiv) return "Error: 未找到女優資訊";
+  const actressLink = Array.from(actressDiv.querySelectorAll("a"))
+    .find(a => a.getAttribute("href") && a.getAttribute("href").startsWith("/actresses/"));
+  if (!actressLink) return "Error: 未找到女優連結";
+  const actressName = actressLink.textContent.trim();
+  let actressUrl = actressLink.getAttribute("href");
+  if (actressUrl.startsWith("/actresses/")) {
+    actressUrl = "https://fc2ppvdb.com" + actressUrl;
+  }
+  return { actressName, actressUrl };
+}
+
+function updateVideoInfo(actressData) {
+  const infoElem = sidebar.querySelector("#fc2-info");
+  if (!infoElem) return;
+  if (typeof actressData === "string" && actressData.startsWith("Error:")) {
+    infoElem.innerHTML = actressData;
+    return;
+  }
+  // 只顯示女優名稱（純文字），不附連結
+  infoElem.innerHTML = `<div>女優：${actressData.actressName}</div>
+    <h4>相關影片</h4>
+    <div id="fc2-related-videos"><p>正在抓取相關影片...</p></div>`;
+  // 從女優頁面抓取相關影片
+  fetchRelatedVideos(actressData.actressUrl).then(relatedHtml => {
+    updateRelatedVideos(relatedHtml);
+  });
+}
+
+// 從女優頁面抓取最新3個相關影片，生成動態 Table（最多顯示18個），只顯示影片番號文字
+function fetchRelatedVideos(actressUrl) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: "FETCH_RELATED_VIDEOS", actressUrl }, (response) => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
+    });
+  })
+  .then(htmlText => {
+    console.log("相關影片頁面原始 HTML（前500字符）：", htmlText.substring(0, 500));
+    const doc = new DOMParser().parseFromString(htmlText, "text/html");
+    // 根據新格式：鎖定所有 <p class="text-gray-500"> 中的 a 標籤
+    const anchors = doc.querySelectorAll("p.text-gray-500 a");
+    let videos = [];
+    anchors.forEach(anchor => {
+      const videoNum = anchor.textContent.trim();
+      if (videoNum) videos.push(videoNum);
+    });
+    videos = [...new Set(videos)].slice(0, 18);
+    if (videos.length === 0) return "Error: 未找到任何相關影片數據";
+    let tableHtml = `<table style="width:100%; border-collapse: collapse;"><tbody>`;
+    for (let i = 0; i < videos.length; i++) {
+      if (i % 3 === 0) tableHtml += `<tr>`;
+      const videoNum = videos[i];
+      const searchUrl = `https://sukebei.nyaa.si/?f=0&c=0_0&q=FC2+${videoNum}`;
+      tableHtml += `<td data-videonum="${videoNum}" style="border: 1px solid #ccc; text-align: center; padding: 5px; cursor: pointer;" onclick="window.open('${searchUrl}', '_blank')">${videoNum}</td>`;
+      if (i % 3 === 2) tableHtml += `</tr>`;
+    }      
+    if (videos.length % 3 !== 0) tableHtml += `</tr>`;
+    tableHtml += `</tbody></table>`;
+    return tableHtml;
+  })
+  .catch(error => {
+    console.error("抓取相關影片錯誤：", error);
+    return `Error: ${error.message}`;
+  });
+}
+
+function updateRelatedVideos(html) {
+  const infoElem = sidebar.querySelector("#fc2-info");
+  if (!infoElem) return;
+  let relatedContainer = infoElem.querySelector("#fc2-related-videos");
+  if (!relatedContainer) {
+    relatedContainer = document.createElement("div");
+    relatedContainer.id = "fc2-related-videos";
+    infoElem.appendChild(relatedContainer);
+  }
+  relatedContainer.innerHTML = html;
+  setupHoverEvents(); // hover 事件
+}
+
+
+// 新增 Hover 預覽功能：全局緩存
+const previewCache = {};
+
+function fetchPreviewImageSrc(videoNumber) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW", videoNumber }, (response) => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
+    });
+  })
+  .then(htmlText => {
+    const doc = new DOMParser().parseFromString(htmlText, "text/html");
+    const img = doc.querySelector(`a[target="_blank"] img[alt="${videoNumber}"]`);
+    if (img) {
+      let src = img.getAttribute("src");
+      if (src.startsWith("//")) src = "https:" + src;
+      return src;
+    }
+    throw new Error("未找到預覽圖");
+  });
+}
+
+function showHoverPreview(videoNum, event) {
+  if (previewCache[videoNum]) {
+    displayHoverPreview(previewCache[videoNum], event);
+  } else {
+    fetchPreviewImageSrc(videoNum)
+      .then(src => {
+        previewCache[videoNum] = src;
+        displayHoverPreview(src, event);
+      })
+      .catch(error => {
+        console.error("fetchPreviewImageSrc error:", error);
+      });
+  }
+}
+
+function displayHoverPreview(src, event) {
+  let hoverDiv = document.getElementById("hover-preview");
+  if (!hoverDiv) {
+    hoverDiv = document.createElement("div");
+    hoverDiv.id = "hover-preview";
+    // 樣式由 CSS 控制
+    document.body.appendChild(hoverDiv);
+  }
+  hoverDiv.innerHTML = `<img src="${src}" alt="" />`;
+  hoverDiv.style.left = (event.pageX + 10) + "px";
+  hoverDiv.style.top = (event.pageY + 10) + "px";
+  hoverDiv.style.display = "block";
+}
+
+function hideHoverPreview() {
+  const hoverDiv = document.getElementById("hover-preview");
+  if (hoverDiv) {
+    hoverDiv.style.display = "none";
+  }
+}
+
+// 為相關影片的表格 td 添加 hover 事件
+function setupHoverEvents() {
+  const cells = sidebar.querySelectorAll("#fc2-related-videos td[data-videonum]");
+  cells.forEach(cell => {
+    const videoNum = cell.getAttribute("data-videonum");
+    cell.addEventListener("mouseover", (e) => {
+      showHoverPreview(videoNum, e);
+    });
+    cell.addEventListener("mousemove", (e) => {
+      let hoverDiv = document.getElementById("hover-preview");
+      if (hoverDiv && hoverDiv.style.display === "block") {
+        hoverDiv.style.left = (e.pageX + 10) + "px";
+        hoverDiv.style.top = (e.pageY + 10) + "px";
+      }
+    });
+    cell.addEventListener("mouseout", () => {
+      hideHoverPreview();
+    });
+  });
+}

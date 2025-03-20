@@ -1,0 +1,38 @@
+#fc2-sidebar {
+  font-family: Arial, sans-serif;
+  box-shadow: -2px 0 5px rgba(0, 0, 0, 0.2);
+  padding: 10px;
+}
+
+#fc2-sidebar h4 {
+  margin-top: 0;
+}
+
+#fc2-sidebar p {
+  margin: 0 0 10px 0;
+}
+
+a {
+  text-decoration: none;
+}
+
+a img {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+}
+
+/* hover 預覽窗口，由 CSS 控制 */
+#hover-preview {
+  position: absolute;
+  border: 1px solid #ccc;
+  background: #fff;
+  padding: 5px;
+  z-index: 100000;
+  display: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+#hover-preview img {
+  max-width: 200px;
+  max-height: 200px;
+}
