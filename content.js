@@ -34,7 +34,7 @@ function openSidebar() {
       <hr>
       <div id="fc2-preview" style="margin-top:10px;"></div>
       <hr>
-      <h4>官方 Sample Images（前6張）</h4>
+      <h4>Sample Images</h4>
       <div id="fc2-preview-official" style="margin-top:10px;"></div>
     `;
     document.body.appendChild(sidebar);
@@ -69,7 +69,7 @@ function autoRefreshAll() {
 function updateSection(sectionId, fetchFunc, updateFunc, videoNumber) {
   const elem = sidebar.querySelector("#" + sectionId);
   if (elem) {
-    elem.innerHTML = `<p>正在抓取 ${sectionId}...</p>`;
+    elem.innerHTML = `<p>正在提取 ${sectionId}...</p>`;
     fetchFunc(videoNumber).then(result => {
       if (!result || (typeof result === "string" && (result.trim() === "" || result.startsWith("Error:")))) {
         elem.innerHTML = `<p>未能提取 ${sectionId}。（${result}）</p>`;
@@ -169,10 +169,10 @@ function fetchOfficialPreviewSection(videoNumber) {
       }
       throw new Error("未找到官方預覽圖片列表");
     }
-    throw new Error("官方 Sample Images section 未找到");
+    throw new Error("官方 Sample Images Section 未找到");
   })
   .catch(error => {
-    console.error("抓取或解析 FC2 官方頁面錯誤：", error);
+    console.error("提取或解析 FC2 官方頁面錯誤：", error);
     return `Error: ${error.message}`;
   });
 }
@@ -182,7 +182,7 @@ function updateOfficialPreviewSection(html) {
   if (elem) elem.innerHTML = html;
 }
 
-// 從 fc2ppvdb 影片頁面抓取影片資訊，提取女優資訊
+// 從 fc2ppvdb 影片頁面提取影片資訊，提取女優資訊
 function fetchVideoInfo(videoNumber) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type: "FETCH_VIDEO_INFO", videoNumber }, (response) => {
@@ -194,7 +194,7 @@ function fetchVideoInfo(videoNumber) {
     return extractActressData(htmlText);
   })
   .catch(error => {
-    console.error("抓取或解析影片資訊錯誤：", error);
+    console.error("提取或解析影片資訊錯誤：", error);
     return `Error: ${error.message}`;
   });
 }
@@ -226,14 +226,14 @@ function updateVideoInfo(actressData) {
   // 只顯示女優名稱（純文字），不附連結
   infoElem.innerHTML = `<div>女優：${actressData.actressName}</div>
     <h4>相關影片</h4>
-    <div id="fc2-related-videos"><p>正在抓取相關影片...</p></div>`;
-  // 從女優頁面抓取相關影片
+    <div id="fc2-related-videos"><p>正在提取相關影片...</p></div>`;
+  // 從女優頁面提取相關影片
   fetchRelatedVideos(actressData.actressUrl).then(relatedHtml => {
     updateRelatedVideos(relatedHtml);
   });
 }
 
-// 從女優頁面抓取最新3個相關影片，生成動態 Table（最多顯示18個），只顯示影片番號文字
+// 從女優頁面提取最新相關影片，生成動態 Table（最多顯示18個），只顯示影片番號
 function fetchRelatedVideos(actressUrl) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type: "FETCH_RELATED_VIDEOS", actressUrl }, (response) => {
@@ -266,7 +266,7 @@ function fetchRelatedVideos(actressUrl) {
     return tableHtml;
   })
   .catch(error => {
-    console.error("抓取相關影片錯誤：", error);
+    console.error("提取相關影片錯誤：", error);
     return `Error: ${error.message}`;
   });
 }

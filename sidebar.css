@@ -22,7 +22,7 @@ a img {
   border-radius: 3px;
 }
 
-/* hover 預覽窗口，由 CSS 控制 */
+/* hover 預覽窗口，由 CSS 控制，不過暫時未 Work*/
 #hover-preview {
   position: absolute;
   border: 1px solid #ccc;

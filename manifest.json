@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "FC2 預覽側邊欄 - 雙來源+影片資訊版",
   "version": "3.0",
-  "description": "側邊欄開啓後自動從 fc2ppvdb 提取影片預覽圖、影片資訊及相關影片（顯示女優名稱和相關影片），同時從 FC2 官方抓取 Sample Images，請求時自動設置 Cookies。",
+  "description": "側邊欄開啓後自動從 FC2PPVDB 提取影片主預覽圖、女優名稱和相關影片資訊，同時從官方獲取 Sample Images，並自動設置Cookies通過成人驗證。",
   "permissions": [
     "activeTab",
     "scripting",

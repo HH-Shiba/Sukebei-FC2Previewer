@@ -81,7 +81,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   } else if (msg.type === "FETCH_RELATED_VIDEOS") {
-    const actressUrl = msg.actressUrl; // 完整女優頁面 URL
+    const actressUrl = msg.actressUrl; // 完整女優個人頁面 URL
     fetch(actressUrl, {
       credentials: "omit",
       mode: "cors",
