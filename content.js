@@ -24,7 +24,7 @@ function openSidebar() {
     sidebar = document.createElement("div");
     sidebar.id = "fc2-sidebar";
     sidebar.style.cssText = `
-      position: fixed; top: 0; right: 0; width: 480px; height: 100%;
+      position: fixed; top: 0; right: 0; width: 360px; height: 100%;
       background-color: #fff; border-left: 1px solid #ccc; z-index: 999999; overflow: auto; padding: 10px;
     `;
     sidebar.innerHTML = `
@@ -51,32 +51,44 @@ function closeSidebar() {
 }
 
 function autoRefreshAll() {
-  if (!window.location.href.includes("/view/")) return;
+  if (!sidebarOpen || !window.location.href.includes("/view/")) return;
   setTimeout(() => {
     const videoNumber = autoExtractVideoNumber();
     if (!videoNumber) return;
     const msgElem = sidebar.querySelector("#fc2-message");
     if (msgElem) msgElem.textContent = "";
-    // 影片資訊區（女優名稱 + 相關影片）
-    updateSection("fc2-info", fetchVideoInfo, updateVideoInfo, videoNumber);
-    // fc2ppvdb 預覽區
-    updateSection("fc2-preview", fetchPreviewSection, updatePreviewSection, videoNumber);
-    // 官方 Sample Images 區
-    updateSection("fc2-preview-official", fetchOfficialPreviewSection, updateOfficialPreviewSection, videoNumber);
+    ["fc2-info", "fc2-preview", "fc2-preview-official"].forEach(sectionId => {
+      updateSection(sectionId, videoNumber);
+    });
   }, 1000);
 }
 
-function updateSection(sectionId, fetchFunc, updateFunc, videoNumber) {
+function updateSection(sectionId, videoNumber) {
+  const fetchMap = {
+    "fc2-info": fetchVideoInfo,
+    "fc2-preview": fetchPreviewSection,
+    "fc2-preview-official": fetchOfficialPreviewSection
+  };
+  const updateMap = {
+    "fc2-info": updateVideoInfo,
+    "fc2-preview": updatePreviewSection,
+    "fc2-preview-official": updateOfficialPreviewSection
+  };
   const elem = sidebar.querySelector("#" + sectionId);
   if (elem) {
     elem.innerHTML = `<p>正在提取 ${sectionId}...</p>`;
-    fetchFunc(videoNumber).then(result => {
-      if (!result || (typeof result === "string" && (result.trim() === "" || result.startsWith("Error:")))) {
-        elem.innerHTML = `<p>未能提取 ${sectionId}。（${result}）</p>`;
-      } else {
-        updateFunc(result);
-      }
-    });
+    fetchMap[sectionId](videoNumber)
+      .then(result => {
+        if (!result || (typeof result === "string" && result.startsWith("Error:"))) {
+          elem.innerHTML = `<p>未能提取 ${sectionId}。（${result}）</p>`;
+        } else {
+          updateMap[sectionId](result);
+        }
+      })
+      .catch(error => {
+        console.error(`Error updating section ${sectionId}:`, error);
+        elem.innerHTML = `<p>提取 ${sectionId} 時發生錯誤。</p>`;
+      });
   }
 }
 

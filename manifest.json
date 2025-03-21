@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "FC2 預覽側邊欄 - 雙來源+影片資訊版",
+  "name": "FC2 預覽側邊欄",
   "version": "3.0",
-  "description": "側邊欄開啓後自動從 FC2PPVDB 提取影片主預覽圖、女優名稱和相關影片資訊，同時從官方獲取 Sample Images，並自動設置Cookies通過成人驗證。",
+  "description": "自動提取 FC2 影片資訊與預覽圖。",
   "permissions": [
     "activeTab",
     "scripting",
@@ -26,5 +26,10 @@
       "js": ["content.js"],
       "css": ["sidebar.css"]
     }
-  ]
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
 }
