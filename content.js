@@ -134,14 +134,84 @@ function fetchPreviewSection(videoNumber) {
       const anchor = img.parentElement;
       anchor.href = anchor.href.startsWith("//") ? "https:" + anchor.href : anchor.href;
       img.src = img.src.startsWith("//") ? "https:" + img.src : img.src;
-      console.log("成功提取 fc2ppvdb 預覽圖 HTML：", anchor.outerHTML);
-      return anchor.outerHTML;
+      
+      // 檢查圖片是否能正常載入
+      return new Promise((resolveImg, rejectImg) => {
+        const testImg = new Image();
+        testImg.onload = () => {
+          console.log("成功提取並驗證 fc2ppvdb 預覽圖：", anchor.outerHTML);
+          resolveImg(anchor.outerHTML);
+        };
+        testImg.onerror = () => {
+          console.log("fc2ppvdb 預覽圖無法載入");
+          rejectImg(new Error("fc2ppvdb 預覽圖無法載入"));
+        };
+        testImg.src = img.src;
+        
+        // 設置超時，如果5秒內圖片還未載入，就視為失敗
+        setTimeout(() => {
+          if (!testImg.complete) {
+            console.log("fc2ppvdb 預覽圖載入超時");
+            rejectImg(new Error("fc2ppvdb 預覽圖載入超時"));
+          }
+        }, 5000);
+      });
     }
     throw new Error("fc2ppvdb 預覽圖元素未找到");
   })
   .catch(error => {
-    console.error("抓取或解析 fc2ppvdb 頁面錯誤：", error);
-    return `Error: ${error.message}`;
+    console.log("fc2ppvdb 預覽圖提取失敗，嘗試從官方網站獲取：", error);
+    // 如果 fc2ppvdb 提取失敗，嘗試從官方網站獲取
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
+      });
+    })
+    .then(htmlText => {
+      const doc = new DOMParser().parseFromString(htmlText, "text/html");
+      const mainThumb = doc.querySelector("div.items_article_MainitemThumb");
+      if (mainThumb) {
+        const img = mainThumb.querySelector("img");
+        if (img) {
+          img.src = img.src.startsWith("//") ? "https:" + img.src : img.src;
+          
+          // 同樣檢查官方圖片是否能正常載入
+          return new Promise((resolveImg, rejectImg) => {
+            const testImg = new Image();
+            testImg.onload = () => {
+              const duration = mainThumb.querySelector(".items_article_info")?.textContent || "";
+              const previewHtml = `
+                <div class="fc2-preview-container">
+                  <img src="${img.src}" alt="${img.alt || videoNumber}" style="max-width: 100%; height: auto;">
+                  ${duration ? `<div class="duration">${duration}</div>` : ""}
+                </div>
+              `;
+              console.log("成功從官方網站提取並驗證預覽圖");
+              resolveImg(previewHtml);
+            };
+            testImg.onerror = () => {
+              console.log("官方預覽圖無法載入");
+              rejectImg(new Error("官方預覽圖無法載入"));
+            };
+            testImg.src = img.src;
+            
+            // 設置超時
+            setTimeout(() => {
+              if (!testImg.complete) {
+                console.log("官方預覽圖載入超時");
+                rejectImg(new Error("官方預覽圖載入超時"));
+              }
+            }, 5000);
+          });
+        }
+      }
+      throw new Error("官方網站預覽圖元素未找到");
+    })
+    .catch(error => {
+      console.error("從官方網站提取預覽圖失敗：", error);
+      return `Error: ${error.message}`;
+    });
   });
 }
 
@@ -293,14 +363,19 @@ function updateRelatedVideos(html) {
     infoElem.appendChild(relatedContainer);
   }
   relatedContainer.innerHTML = html;
-  setupHoverEvents(); // hover 事件
+  
+  // 確保在更新內容後立即設置懸浮事件
+  setTimeout(() => {
+    setupHoverEvents();
+    console.log("已設置懸浮預覽事件");
+  }, 100);
 }
-
 
 // 新增 Hover 預覽功能：全局緩存
 const previewCache = {};
 
 function fetchPreviewImageSrc(videoNumber) {
+  // 首先嘗試從 FC2PPVDB 獲取
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type: "FETCH_PREVIEW", videoNumber }, (response) => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
@@ -313,9 +388,52 @@ function fetchPreviewImageSrc(videoNumber) {
     if (img) {
       let src = img.getAttribute("src");
       if (src.startsWith("//")) src = "https:" + src;
-      return src;
+      
+      // 檢查圖片是否能正常載入
+      return new Promise((resolveImg, rejectImg) => {
+        const testImg = new Image();
+        testImg.onload = () => resolveImg(src);
+        testImg.onerror = () => rejectImg(new Error("圖片載入失敗"));
+        testImg.src = src;
+        
+        setTimeout(() => {
+          if (!testImg.complete) rejectImg(new Error("圖片載入超時"));
+        }, 5000);
+      });
     }
     throw new Error("未找到預覽圖");
+  })
+  .catch(error => {
+    console.log(`從 FC2PPVDB 獲取預覽圖失敗 (${videoNumber}): ${error}，嘗試從官方網站獲取`);
+    
+    // 如果從 FC2PPVDB 獲取失敗，嘗試從官方網站獲取
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
+      });
+    })
+    .then(htmlText => {
+      const doc = new DOMParser().parseFromString(htmlText, "text/html");
+      const mainThumb = doc.querySelector("div.items_article_MainitemThumb img");
+      if (mainThumb) {
+        let src = mainThumb.getAttribute("src");
+        if (src.startsWith("//")) src = "https:" + src;
+        
+        // 同樣檢查官方圖片是否能正常載入
+        return new Promise((resolveImg, rejectImg) => {
+          const testImg = new Image();
+          testImg.onload = () => resolveImg(src);
+          testImg.onerror = () => rejectImg(new Error("官方圖片載入失敗"));
+          testImg.src = src;
+          
+          setTimeout(() => {
+            if (!testImg.complete) rejectImg(new Error("官方圖片載入超時"));
+          }, 5000);
+        });
+      }
+      throw new Error("未找到官方預覽圖");
+    });
   });
 }
 
@@ -323,14 +441,38 @@ function showHoverPreview(videoNum, event) {
   if (previewCache[videoNum]) {
     displayHoverPreview(previewCache[videoNum], event);
   } else {
+    // 顯示載入中的提示
+    displayLoadingPreview(event);
+    
     fetchPreviewImageSrc(videoNum)
       .then(src => {
         previewCache[videoNum] = src;
         displayHoverPreview(src, event);
       })
       .catch(error => {
-        console.error("fetchPreviewImageSrc error:", error);
+        console.error(`獲取預覽圖失敗 (${videoNum}):`, error);
+        displayErrorPreview(event);
       });
+  }
+}
+
+function displayLoadingPreview(event) {
+  let hoverDiv = document.getElementById("hover-preview");
+  if (!hoverDiv) {
+    hoverDiv = document.createElement("div");
+    hoverDiv.id = "hover-preview";
+    document.body.appendChild(hoverDiv);
+  }
+  hoverDiv.innerHTML = `<div class="preview-loading">載入中...</div>`;
+  hoverDiv.style.left = (event.pageX + 10) + "px";
+  hoverDiv.style.top = (event.pageY + 10) + "px";
+  hoverDiv.style.display = "block";
+}
+
+function displayErrorPreview(event) {
+  let hoverDiv = document.getElementById("hover-preview");
+  if (hoverDiv) {
+    hoverDiv.innerHTML = `<div class="preview-error">無法載入預覽圖</div>`;
   }
 }
 
@@ -358,11 +500,17 @@ function hideHoverPreview() {
 // 為相關影片的表格 td 添加 hover 事件
 function setupHoverEvents() {
   const cells = sidebar.querySelectorAll("#fc2-related-videos td[data-videonum]");
+  console.log("找到的相關影片單元格數量：", cells.length);
+  
   cells.forEach(cell => {
     const videoNum = cell.getAttribute("data-videonum");
+    console.log("設置懸浮事件，影片編號：", videoNum);
+    
     cell.addEventListener("mouseover", (e) => {
+      console.log("觸發 mouseover 事件，影片編號：", videoNum);
       showHoverPreview(videoNum, e);
     });
+    
     cell.addEventListener("mousemove", (e) => {
       let hoverDiv = document.getElementById("hover-preview");
       if (hoverDiv && hoverDiv.style.display === "block") {
@@ -370,7 +518,9 @@ function setupHoverEvents() {
         hoverDiv.style.top = (e.pageY + 10) + "px";
       }
     });
+    
     cell.addEventListener("mouseout", () => {
+      console.log("觸發 mouseout 事件，影片編號：", videoNum);
       hideHoverPreview();
     });
   });
