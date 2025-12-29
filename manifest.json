@@ -1,18 +1,18 @@
 {
   "manifest_version": 3,
   "name": "FC2 預覽側邊欄",
-  "version": "3.0",
+  "version": "3.1",
   "description": "自動提取 FC2 影片資訊與預覽圖。",
   "permissions": [
-    "activeTab",
-    "scripting",
-    "storage",
-    "tabs",
-    "cookies"
-  ],
+  "activeTab",
+  "scripting",
+  "storage",
+  "tabs",
+  "cookies"
+],
   "host_permissions": [
-    "https://fc2ppvdb.com/*",
-    "https://adult.contents.fc2.com/*"
+  "https://fd2ppv.cc/*",
+  "https://*.fc2.com/*"
   ],
   "action": {
     "default_title": "切換 FC2 預覽側邊欄"

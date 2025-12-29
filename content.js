@@ -121,8 +121,10 @@ document.addEventListener("mouseup", () => {
 
 // 從 fc2ppvdb 頁面抓取預覽圖（返回 HTML）
 function fetchPreviewSection(videoNumber) {
+  console.log("新站點無預覽圖，直接從官方網站獲取...");
+  // 直接呼叫官方抓取邏輯，不再嘗試從 fd2ppv.cc 抓取 img 標籤
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW", videoNumber }, (response) => {
+    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
       response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
     });
@@ -281,19 +283,19 @@ function fetchVideoInfo(videoNumber) {
   });
 }
 
-// 從影片資訊 HTML 中提取女優資訊（只取女優名稱與連結，過濾掉包含「ランキング」的）
+// 從影片資訊 HTML 中提取女優資訊
 function extractActressData(htmlText) {
   const doc = new DOMParser().parseFromString(htmlText, "text/html");
-  const actressDiv = Array.from(doc.querySelectorAll("div"))
-    .find(div => div.textContent.includes("女優：") && div.textContent.indexOf("ランキング") === -1);
-  if (!actressDiv) return "Error: 未找到女優資訊";
-  const actressLink = Array.from(actressDiv.querySelectorAll("a"))
-    .find(a => a.getAttribute("href") && a.getAttribute("href").startsWith("/actresses/"));
-  if (!actressLink) return "Error: 未找到女優連結";
+  // 優先使用最穩定的 data-actress 屬性
+  const actressLink = doc.querySelector("a.artistUrl[data-actress]") || 
+                      doc.querySelector("h3.artist-name a");
+  
+  if (!actressLink) return "Error: 未找到女優資訊";
+  
   const actressName = actressLink.textContent.trim();
   let actressUrl = actressLink.getAttribute("href");
-  if (actressUrl.startsWith("/actresses/")) {
-    actressUrl = "https://fc2ppvdb.com" + actressUrl;
+  if (actressUrl && actressUrl.startsWith("/")) {
+    actressUrl = "https://fd2ppv.cc" + actressUrl;
   }
   return { actressName, actressUrl };
 }
@@ -324,33 +326,41 @@ function fetchRelatedVideos(actressUrl) {
     });
   })
   .then(htmlText => {
-    console.log("相關影片頁面原始 HTML（前500字符）：", htmlText.substring(0, 500));
     const doc = new DOMParser().parseFromString(htmlText, "text/html");
-    // 根據新格式：鎖定所有 <p class="text-gray-500"> 中的 a 標籤
-    const anchors = doc.querySelectorAll("p.text-gray-500 a");
+    // 鎖定 Grid 內的項目
+    const items = doc.querySelectorAll(".other-works-grid .other-work-item");
+    
     let videos = [];
-    anchors.forEach(anchor => {
-      const videoNum = anchor.textContent.trim();
-      if (videoNum) videos.push(videoNum);
+    items.forEach(item => {
+      // 在項目內尋找 Title 或是直接尋找連結文字
+      const titleEl = item.querySelector(".other-work-title");
+      if (titleEl) {
+        const text = titleEl.textContent.trim();
+        // 改良的正則：尋找 FC2-PPV- 後面的數字，或純 7 位數字
+        const match = text.match(/(\d{5,8})/); 
+        if (match) videos.push(match[1]);
+      }
     });
+
+    // 移除重複並限制數量
     videos = [...new Set(videos)].slice(0, 18);
-    if (videos.length === 0) return "Error: 未找到任何相關影片數據";
+    
+    if (videos.length === 0) return "Error: 未找到任何相關影片編號";
+
+    // 建立表格 (保持原本的 Table 生成代碼)
     let tableHtml = `<table style="width:100%; border-collapse: collapse;"><tbody>`;
     for (let i = 0; i < videos.length; i++) {
       if (i % 3 === 0) tableHtml += `<tr>`;
       const videoNum = videos[i];
       const searchUrl = `https://sukebei.nyaa.si/?f=0&c=0_0&q=FC2+${videoNum}`;
-      tableHtml += `<td data-videonum="${videoNum}" style="border: 1px solid #ccc; text-align: center; padding: 5px; cursor: pointer;" onclick="window.open('${searchUrl}', '_blank')">${videoNum}</td>`;
+      tableHtml += `<td data-videonum="${videoNum}" style="border: 1px solid #ccc; text-align: center; padding: 5px; cursor: pointer; font-size: 12px;" onclick="window.open('${searchUrl}', '_blank')">${videoNum}</td>`;
       if (i % 3 === 2) tableHtml += `</tr>`;
     }      
     if (videos.length % 3 !== 0) tableHtml += `</tr>`;
     tableHtml += `</tbody></table>`;
     return tableHtml;
   })
-  .catch(error => {
-    console.error("提取相關影片錯誤：", error);
-    return `Error: ${error.message}`;
-  });
+  .catch(error => `Error: ${error.message}`);
 }
 
 function updateRelatedVideos(html) {
