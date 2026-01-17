@@ -1,7 +1,44 @@
-// 3.0 版本 - content.js
+// 3.1 版本 - content.js (重構優化版)
 
 let sidebarOpen = false;
 let sidebar = null;
+const fetchCache = {}; // 快取已抓取的內容
+
+// ---------------------- Utility Functions ----------------------
+
+// 統一的訊息發送工具
+function sendMessageFetch(type, payload) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type, ...payload }, (response) => {
+      if (chrome.runtime.lastError) {
+        return reject(new Error(chrome.runtime.lastError.message));
+      }
+      if (response && response.success) {
+        resolve(response.html);
+      } else {
+        reject(new Error(response ? response.error : "Unknown error"));
+      }
+    });
+  });
+}
+
+// HTML 解析工具
+function parseHtml(htmlString) {
+  return new DOMParser().parseFromString(htmlString, "text/html");
+}
+
+// 防抖延遲執行
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
 
 // 初始化：如果側邊欄開啓則自動刷新
 chrome.storage.local.get("sidebarOpen", (result) => {
@@ -34,7 +71,7 @@ function openSidebar() {
       <hr>
       <div id="fc2-preview" style="margin-top:10px;"></div>
       <hr>
-      <h4>Sample Images</h4>
+      <h4>FC2-Preview (Sample Images)</h4>
       <div id="fc2-preview-official" style="margin-top:10px;"></div>
     `;
     document.body.appendChild(sidebar);
@@ -119,101 +156,95 @@ document.addEventListener("mouseup", () => {
 
 // ---------------------- Fetch & Update Functions ----------------------
 
-// 從 fc2ppvdb 頁面抓取預覽圖（返回 HTML）
+// 從主題圖來源獲取預覽圖（SupJav-Cover → FC2-Cover）
 function fetchPreviewSection(videoNumber) {
-  console.log("新站點無預覽圖，直接從官方網站獲取...");
-  // 直接呼叫官方抓取邏輯，不再嘗試從 fd2ppv.cc 抓取 img 標籤
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
-      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
-    });
-  })
+  // 優先使用 Supjav Cover
+  return fetchSupjavCover(videoNumber)
+  .catch(error => {
+    console.log(`[SupJav-Cover] 失敗，fallback 至 FC2-Cover: ${error.message}`);
+    // Fallback 至 FC2 官方 Cover
+    return fetchFC2Cover(videoNumber);
+  });
+}
+
+// 從 Supjav 獲取主題圖
+function fetchSupjavCover(videoNumber) {
+  const searchUrl = `https://supjav.com/?s=${videoNumber}`;
+  return sendMessageFetch("FETCH_SUPJAV", { searchUrl })
   .then(htmlText => {
-    const doc = new DOMParser().parseFromString(htmlText, "text/html");
-    const img = doc.querySelector(`a[target="_blank"] img[alt="${videoNumber}"]`);
-    if (img) {
-      const anchor = img.parentElement;
-      anchor.href = anchor.href.startsWith("//") ? "https:" + anchor.href : anchor.href;
-      img.src = img.src.startsWith("//") ? "https:" + img.src : img.src;
+    const doc = parseHtml(htmlText);
+    const firstResult = doc.querySelector("a.img img");
+    if (firstResult) {
+      let src = firstResult.getAttribute("data-original") || firstResult.getAttribute("src");
+      if (!src) throw new Error("未找到圖片 src");
       
-      // 檢查圖片是否能正常載入
+      // 去掉 resize 參數
+      src = src.replace(/!\d+x\d+\.jpg$/i, "");
+      if (src.startsWith("//")) src = "https:" + src;
+      
+      // 檢查圖片可用性
       return new Promise((resolveImg, rejectImg) => {
         const testImg = new Image();
         testImg.onload = () => {
-          console.log("成功提取並驗證 fc2ppvdb 預覽圖：", anchor.outerHTML);
-          resolveImg(anchor.outerHTML);
+          const previewHtml = `
+            <div class="fc2-preview-container">
+              <img src="${src}" alt="${videoNumber}" style="max-width: 100%; height: auto;">
+            </div>
+          `;
+          console.log("成功從 SupJav-Cover 獲取主題圖");
+          resolveImg(previewHtml);
         };
-        testImg.onerror = () => {
-          console.log("fc2ppvdb 預覽圖無法載入");
-          rejectImg(new Error("fc2ppvdb 預覽圖無法載入"));
-        };
-        testImg.src = img.src;
+        testImg.onerror = () => rejectImg(new Error("SupJav-Cover 圖片載入失敗"));
+        testImg.src = src;
         
-        // 設置超時，如果5秒內圖片還未載入，就視為失敗
         setTimeout(() => {
-          if (!testImg.complete) {
-            console.log("fc2ppvdb 預覽圖載入超時");
-            rejectImg(new Error("fc2ppvdb 預覽圖載入超時"));
-          }
-        }, 5000);
+          if (!testImg.complete) rejectImg(new Error("SupJav-Cover 圖片載入超時"));
+        }, 1200);
       });
     }
-    throw new Error("fc2ppvdb 預覽圖元素未找到");
+    throw new Error("Supjav 未找到搜尋結果");
+  });
+}
+
+// 從 FC2 官方獲取主題圖
+function fetchFC2Cover(videoNumber) {
+  return sendMessageFetch("FETCH_PREVIEW_OFFICIAL", { videoNumber })
+  .then(htmlText => {
+    const doc = parseHtml(htmlText);
+    const mainThumb = doc.querySelector("div.items_article_MainitemThumb");
+    if (!mainThumb) throw new Error("未找到 FC2 官方主題圖");
+    
+    const img = mainThumb.querySelector("img");
+    if (!img) throw new Error("未找到圖片元素");
+    
+    let src = img.getAttribute("src");
+    if (src.startsWith("//")) src = "https:" + src;
+    
+    // 檢查圖片可用性
+    return new Promise((resolveImg, rejectImg) => {
+      const testImg = new Image();
+      testImg.onload = () => {
+        const duration = mainThumb.querySelector(".items_article_info")?.textContent || "";
+        const previewHtml = `
+          <div class="fc2-preview-container">
+            <img src="${src}" alt="${videoNumber}" style="max-width: 100%; height: auto;">
+            ${duration ? `<div class="duration">${duration}</div>` : ""}
+          </div>
+        `;
+        console.log("成功從 FC2-Cover 獲取主題圖");
+        resolveImg(previewHtml);
+      };
+      testImg.onerror = () => rejectImg(new Error("FC2-Cover 圖片載入失敗"));
+      testImg.src = src;
+      
+      setTimeout(() => {
+        if (!testImg.complete) rejectImg(new Error("FC2-Cover 圖片載入超時"));
+      }, 1200);
+    });
   })
   .catch(error => {
-    console.log("fc2ppvdb 預覽圖提取失敗，嘗試從官方網站獲取：", error);
-    // 如果 fc2ppvdb 提取失敗，嘗試從官方網站獲取
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
-        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-        response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
-      });
-    })
-    .then(htmlText => {
-      const doc = new DOMParser().parseFromString(htmlText, "text/html");
-      const mainThumb = doc.querySelector("div.items_article_MainitemThumb");
-      if (mainThumb) {
-        const img = mainThumb.querySelector("img");
-        if (img) {
-          img.src = img.src.startsWith("//") ? "https:" + img.src : img.src;
-          
-          // 同樣檢查官方圖片是否能正常載入
-          return new Promise((resolveImg, rejectImg) => {
-            const testImg = new Image();
-            testImg.onload = () => {
-              const duration = mainThumb.querySelector(".items_article_info")?.textContent || "";
-              const previewHtml = `
-                <div class="fc2-preview-container">
-                  <img src="${img.src}" alt="${img.alt || videoNumber}" style="max-width: 100%; height: auto;">
-                  ${duration ? `<div class="duration">${duration}</div>` : ""}
-                </div>
-              `;
-              console.log("成功從官方網站提取並驗證預覽圖");
-              resolveImg(previewHtml);
-            };
-            testImg.onerror = () => {
-              console.log("官方預覽圖無法載入");
-              rejectImg(new Error("官方預覽圖無法載入"));
-            };
-            testImg.src = img.src;
-            
-            // 設置超時
-            setTimeout(() => {
-              if (!testImg.complete) {
-                console.log("官方預覽圖載入超時");
-                rejectImg(new Error("官方預覽圖載入超時"));
-              }
-            }, 5000);
-          });
-        }
-      }
-      throw new Error("官方網站預覽圖元素未找到");
-    })
-    .catch(error => {
-      console.error("從官方網站提取預覽圖失敗：", error);
-      return `Error: ${error.message}`;
-    });
+    console.error("FC2-Cover 提取失敗：", error);
+    return `Error: ${error.message}`;
   });
 }
 
@@ -224,14 +255,9 @@ function updatePreviewSection(html) {
 
 // 從 FC2 官方頁面抓取 Sample Images（前6張）
 function fetchOfficialPreviewSection(videoNumber) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
-      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
-    });
-  })
+  return sendMessageFetch("FETCH_PREVIEW_OFFICIAL", { videoNumber })
   .then(htmlText => {
-    const doc = new DOMParser().parseFromString(htmlText, "text/html");
+    const doc = parseHtml(htmlText);
     const section = doc.querySelector("section.items_article_SampleImages");
     if (section) {
       const ul = section.querySelector("ul.items_article_SampleImagesArea");
@@ -381,56 +407,57 @@ function updateRelatedVideos(html) {
   }, 100);
 }
 
-// 新增 Hover 預覽功能：全局緩存
+// 新增 Hover 預覽功能：全局緩存與請求去重
 const previewCache = {};
+const inflightRequests = {}; // 追蹤進行中的請求，避免重複
 
-function fetchPreviewImageSrc(videoNumber) {
-  // 首先嘗試從 FC2PPVDB 獲取
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: "FETCH_PREVIEW", videoNumber }, (response) => {
-      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-      response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
-    });
-  })
+// 從 Supjav 搜尋頁面獲取預覽圖
+function fetchSupjavPreviewImage(videoNumber) {
+  const searchUrl = `https://supjav.com/?s=${videoNumber}`;
+  return sendMessageFetch("FETCH_SUPJAV", { searchUrl })
   .then(htmlText => {
-    const doc = new DOMParser().parseFromString(htmlText, "text/html");
-    const img = doc.querySelector(`a[target="_blank"] img[alt="${videoNumber}"]`);
-    if (img) {
-      let src = img.getAttribute("src");
+    const doc = parseHtml(htmlText);
+    const firstResult = doc.querySelector("a.img img");
+    if (firstResult) {
+      let src = firstResult.getAttribute("data-original") || firstResult.getAttribute("src");
+      if (!src) throw new Error("未找到圖片 src");
+      
+      // 去掉 resize 參數 (!320x216.jpg)
+      src = src.replace(/!\d+x\d+\.jpg$/i, "");
+      
+      // 確保 https
       if (src.startsWith("//")) src = "https:" + src;
       
-      // 檢查圖片是否能正常載入
+      // 檢查圖片可用性
       return new Promise((resolveImg, rejectImg) => {
         const testImg = new Image();
         testImg.onload = () => resolveImg(src);
-        testImg.onerror = () => rejectImg(new Error("圖片載入失敗"));
+        testImg.onerror = () => rejectImg(new Error("Supjav 圖片載入失敗"));
         testImg.src = src;
         
         setTimeout(() => {
-          if (!testImg.complete) rejectImg(new Error("圖片載入超時"));
+          if (!testImg.complete) rejectImg(new Error("Supjav 圖片載入超時"));
         }, 5000);
       });
     }
-    throw new Error("未找到預覽圖");
-  })
+    throw new Error("Supjav 未找到搜尋結果");
+  });
+}
+
+function fetchPreviewImageSrc(videoNumber) {
+  // Hover 預覽優先使用 Supjav（速度快）
+  return fetchSupjavPreviewImage(videoNumber)
   .catch(error => {
-    console.log(`從 FC2PPVDB 獲取預覽圖失敗 (${videoNumber}): ${error}，嘗試從官方網站獲取`);
-    
-    // 如果從 FC2PPVDB 獲取失敗，嘗試從官方網站獲取
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: "FETCH_PREVIEW_OFFICIAL", videoNumber }, (response) => {
-        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-        response && response.success ? resolve(response.html) : reject(new Error(response ? response.error : "Unknown error"));
-      });
-    })
+    console.log(`[Supjav] 獲取失敗，fallback 至官方: ${error.message}`);
+    // Fallback 至官方網站
+    return sendMessageFetch("FETCH_PREVIEW_OFFICIAL", { videoNumber })
     .then(htmlText => {
-      const doc = new DOMParser().parseFromString(htmlText, "text/html");
+      const doc = parseHtml(htmlText);
       const mainThumb = doc.querySelector("div.items_article_MainitemThumb img");
       if (mainThumb) {
         let src = mainThumb.getAttribute("src");
         if (src.startsWith("//")) src = "https:" + src;
         
-        // 同樣檢查官方圖片是否能正常載入
         return new Promise((resolveImg, rejectImg) => {
           const testImg = new Image();
           testImg.onload = () => resolveImg(src);
@@ -448,22 +475,41 @@ function fetchPreviewImageSrc(videoNumber) {
 }
 
 function showHoverPreview(videoNum, event) {
+  // 已有快取，直接顯示
   if (previewCache[videoNum]) {
     displayHoverPreview(previewCache[videoNum], event);
-  } else {
-    // 顯示載入中的提示
-    displayLoadingPreview(event);
-    
-    fetchPreviewImageSrc(videoNum)
-      .then(src => {
-        previewCache[videoNum] = src;
-        displayHoverPreview(src, event);
-      })
-      .catch(error => {
-        console.error(`獲取預覽圖失敗 (${videoNum}):`, error);
-        displayErrorPreview(event);
-      });
+    return;
   }
+  
+  // 檢查是否正在請求中（避免重複請求）
+  if (inflightRequests[videoNum]) {
+    displayLoadingPreview(event);
+    return;
+  }
+  
+  // 標記為請求中
+  inflightRequests[videoNum] = true;
+  displayLoadingPreview(event);
+  
+  fetchPreviewImageSrc(videoNum)
+    .then(src => {
+      previewCache[videoNum] = src;
+      delete inflightRequests[videoNum];
+      // 只在 hover div 還存在且顯示中才更新
+      const hoverDiv = document.getElementById("hover-preview");
+      if (hoverDiv && hoverDiv.style.display === "block") {
+        displayHoverPreview(src, event);
+      }
+    })
+    .catch(error => {
+      console.error(`獲取預覽圖失敗 (${videoNum}):`, error);
+      previewCache[videoNum] = null; // 記錄失敗，避免重試
+      delete inflightRequests[videoNum];
+      const hoverDiv = document.getElementById("hover-preview");
+      if (hoverDiv && hoverDiv.style.display === "block") {
+        displayErrorPreview(event);
+      }
+    });
 }
 
 function displayLoadingPreview(event) {

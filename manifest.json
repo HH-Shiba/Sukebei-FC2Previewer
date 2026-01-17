@@ -8,11 +8,14 @@
   "scripting",
   "storage",
   "tabs",
-  "cookies"
+  "cookies",
+  "offscreen"
 ],
   "host_permissions": [
   "https://fd2ppv.cc/*",
-  "https://*.fc2.com/*"
+  "https://*.fc2.com/*",
+  "https://supjav.com/*",
+  "https://img.supjav.com/*"
   ],
   "action": {
     "default_title": "切換 FC2 預覽側邊欄"
